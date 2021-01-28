@@ -66,7 +66,7 @@ private:
 // with matching frequencies.
 // updated:
 // the above, deprecated, behaviour has effect if the property: 
-// autopilot/settings/deprec-ILS-by-TDZ  is set true 
+// sim/instrumentation/cull-localisers is not set to 1/true
 // updated behaviour: 'approach side' from true position of either front- or back- course determines if
 // ILS navaid  is usable. Within  a close-by thresold the plane's heading must math ILS bearing.
 // property: instrumentation/nav/back-course-btn, aleady suported by many A/P's will cause 
@@ -75,19 +75,30 @@ private:
 bool navidUsable(FGNavRecord* aNav, const SGGeod &aircraft)
 {
   // get prop nodes for necessary bool values 
-  SGPropertyNode *nodeBCBttn = fgGetNode( "instrumentation/nav/back-course-btn", true);
-  SGPropertyNode *nodeBCFilt = fgGetNode( "instrumentation/annunciators/caution/Filter-FC-BC", true);
-  bool backCrse_bttn         = nodeBCBttn->getBoolValue();
-  bool backCrse_filt         = nodeBCFilt->getBoolValue();
+  SGPropertyNode *BCBttn_node       = fgGetNode( "instrumentation/nav/back-course-btn", true);
+  bool backCrse_bttn                = BCBttn_node->getBoolValue();
+  //
+  SGPropertyNode *cull_enabled_node = fgGetNode( "sim/instrumentation/culling-localisers/enabled", true);
+  bool cull_locs                    = cull_enabled_node->getBoolValue();
+  //
+  SGPropertyNode *cull_by_ATC_node  = fgGetNode( "sim/instrumentation/culling-localisers/by-ATC", true);
+  bool cull_by_ATC                  = cull_by_ATC_node->getBoolValue();
+  //
+  SGPropertyNode *cull_by_ATIS_node = fgGetNode( "sim/instrumentation/culling-localisers/by-ATIS", true);
+  bool cull_by_ATIS                 = cull_by_ATIS_node->getBoolValue();
+  //
+  SGPropertyNode *cull_by_wind_node = fgGetNode( "sim/instrumentation/culling-localisers/by-wind", true);
+  bool cull_by_wind_dir             = cull_by_wind_node->getBoolValue();
+  //
   FGRunway* r(aNav->runway());
   // Nearness threshold to reject nearby off heading ILS signals
   #define cutDist 1.99
   double distToTx            = SGGeodesy::distanceNm (aircraft, aNav->geod());
   double brngToTx            = SGGeodesy::courseDeg  (aircraft, aNav->geod());
-  if ( ! ( backCrse_filt) ) {   
-    // Deprecated previous behavior: no exclusive front/back handling or close to Tx
+  if ( ! ( cull_locs) ) {   
+    // Default, previous behavior: no exclusive front/back handling or close to Tx
     if (!r || !r->reciprocalRunway()) {
-      //cout << 'f' << backCrse_filt  << '-' << backCrse_bttn <<"b ID:" << aNav->ident() << " dist:" << distToTx \
+      //cout << 'f' << cull_locs  << '-' << backCrse_bttn <<"b ID:" << aNav->ident() << " dist:" << distToTx \
       //     << " bng:" << brngToTx << " dflt NPair" << endl;
       return true;
     }
@@ -105,42 +116,60 @@ bool navidUsable(FGNavRecord* aNav, const SGGeod &aircraft)
     double crs = SGGeodesy::courseDeg(aircraft, r->geod());
     double hdgDiff = crs - r->headingDeg();
     SG_NORMALIZE_RANGE(hdgDiff, -180.0, 180.0);
-      //cout << 'f' << backCrse_filt  << '-' << backCrse_bttn << "b ID:" << aNav->ident() << " dist:" << distToTx \
+      //cout << 'f' << cull_locs  << '-' << backCrse_bttn << "b ID:" << aNav->ident() << " dist:" << distToTx \
       //       << " bng:" << brngToTx << " hDif:" << hdgDiff << " dflt Pair Able:" << (fabs(hdgDiff) < 90.0) << endl;
     return (fabs(hdgDiff) < 90.0);
     // 
     // end of previous navidUsable 
   } else {
-    // updated behaviour: 'approach side' from true position of either front- or back- course determines if
-    //   ILS navaid  is usable. Within  a close-by thresold the plane's heading must math ILS heading.
-    //   Front course LOC txmitter posn is near Rwy's far dept end. At Tdwn will be frontSide, closer to recip Tx
-    double hdngDiff = 0;
-    // determine ILS' runway heading, adjust if back course according to BC button in A/P
-    if ( r && (r->ILS()) ) {
-      double hdngRway = r->headingDeg();
-      if ( ( backCrse_bttn )) {
-        hdngRway += 180;
-      }  
-      hdngDiff = brngToTx - hdngRway;
-      SG_NORMALIZE_RANGE(hdngDiff, -180.0, 180.0);
-      //cout << 'f' << backCrse_filt  << '-' << backCrse_bttn << "b ID:" << aNav->ident() << " dist:" << distToTx \
-      //     << " bng:" << brngToTx << " hDf:" << hdngDiff ;
-      bool respPass;      
-      if ( distToTx > cutDist ) {
-        // distant from txmitter, ILS LOC on approach side is usable
-        respPass = ((fabs(hdngDiff) >= -90.0) && ( fabs(hdngDiff) <= 90.0) );
-        //cout << " Far,  pass:" << respPass << endl;
-        return (respPass);
+    bool respPass;      
+    // New behaviour: LOCs are rejected according to  property settings 
+    if        (cull_by_ATC)  {
+      SGPropertyNode *ATC_node = fgGetNode( "sim/atc", true);
+      //respPass = ! strcmp ( string{r->ident()}, ATC_node->getStringValue("runway"));
+      return( respPass);
+    } else if (cull_by_ATIS) {
+      SGPropertyNode *ATC_node = fgGetNode( "sim/atis", true);
+      //respPass = ! strcmp ( string{r->ident()}, ATC_node->getStringValue("runways-in-use"));
+      return( respPass);
+    } else                   {
+      // 'approach side' from true position of either front- or back- course determines if
+      //   ILS navaid  is usable. Within  a close-by thresold the plane's heading must math ILS heading.
+      //   Front course LOC txmitter posn is near Rwy's far dept end. At Tdwn will be frontSide, closer to recip Tx
+      double hdngDiff     = 0;
+      double bestRwayHdng = 0;
+      if (cull_by_wind_dir)  {
+        SGPropertyNode *environment_node = fgGetNode( "environment/wind-from-heading-deg", true);   // s.b -bearing- 
+        bestRwayHdng = environment_node->getDoubleValue();
       } else {
-        // near to txmitter, use aircraft heading to reject nearer signal from eg passing recip-adjacent IJFK-IJOC
-        SGPropertyNode *propACHdng = fgGetNode( "orientation/heading-magnetic-deg", true);
-        double acftDiff = ( propACHdng->getDoubleValue() - hdngRway);
-        SG_NORMALIZE_RANGE(acftDiff, -180.0, 180.0);
-        respPass = ( (fabs(hdngDiff) >= -90.0) && ( fabs(hdngDiff) <= 90.0) \
-                                           && ( fabs(acftDiff) <= 90.0)  );
-        //cout << "  Nr, pass:" << respPass << " acftDiff:" << acftDiff << endl;
-        return (respPass);
+        bestRwayHdng = brngToTx;
       }  
+      // determine ILS' runway heading, adjust if back course according to BC button in A/P
+      if ( r && (r->ILS()) ) {
+        double hdngRway = r->headingDeg();
+        if ( ( backCrse_bttn )) {
+          hdngRway += 180;
+        }  
+        hdngDiff = bestRwayHdng - hdngRway;
+        SG_NORMALIZE_RANGE(hdngDiff, -180.0, 180.0);
+        cout << 'f' << cull_locs  << '-' << backCrse_bttn << "b ID:" << aNav->ident() << " dist:" << distToTx \
+             << " bng:" << brngToTx << " hDf:" << hdngDiff ;
+        if ( distToTx > cutDist ) {
+          // distant from txmitter, ILS LOC on approach side is usable
+          respPass = ((fabs(hdngDiff) >= -90.0) && ( fabs(hdngDiff) <= 90.0) );
+          cout << " Far,  pass:" << respPass << endl;
+          return (respPass);
+        } else {
+          // near to txmitter, use aircraft heading to reject nearer signal from eg passing recip-adjacent IJFK-IJOC
+          SGPropertyNode *propACHdng = fgGetNode( "orientation/heading-magnetic-deg", true);
+          double acftDiff = ( propACHdng->getDoubleValue() - hdngRway);
+          SG_NORMALIZE_RANGE(acftDiff, -180.0, 180.0);
+          respPass = ( (fabs(hdngDiff) >= -90.0) && ( fabs(hdngDiff) <= 90.0) \
+                                             && ( fabs(acftDiff) <= 90.0)  );
+          cout << "  Nr, pass:" << respPass << " acftDiff:" << acftDiff << endl;
+          return (respPass);
+        }
+      } 
     }
   }  
   //  All other cases:  non-paired or non ILS or non-runway, navaid is useable
